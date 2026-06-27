@@ -1,0 +1,9 @@
+TITANIC SURVIVAL INTELLIGENCE SUITE | Full-Stack Machine Learning Platform
+
+* Designed and built an enterprise-grade machine learning dashboard to predict passenger survival probabilities using Random Forest and XGBoost estimators.
+* Engineered a clean FastAPI backend with JWT session refreshing, secure HTTP response headers (CSP, frame options), SQLite/PostgreSQL connectors, and custom sliding-window rate limiters.
+* Developed an interactive React (TypeScript) frontend utilizing Tailwind CSS for glassmorphic visual systems and Recharts for demographic analysis.
+* Implemented local SHAP value mathematical approximations to visualize individual feature contributions (positive vs negative drivers) for Explainable AI (XAI).
+* Integrated drag-and-drop CSV batch upload parsing with 5MB validation blocks, and streamed custom executive PDF summaries and CSV prediction logs.
+* Configured Vite/Rollup manual chunking to divide dependencies, reducing bundle weight from over 500kB to under 100kB.
+* Structured deployment blueprints for Vercel static site hosting and Render backend web services.

@@ -1,0 +1,12 @@
+=======================================================
+Titanic Survival Intelligence Suite - Production Links
+=======================================================
+
+Frontend Application (Vercel):
+https://titanic-survival-intelligence.vercel.app
+
+Backend REST API (Render):
+https://titanic-survival-intelligence-backend.onrender.com
+
+Interactive API Docs (FastAPI OpenAPI):
+https://titanic-survival-intelligence-backend.onrender.com/docs
