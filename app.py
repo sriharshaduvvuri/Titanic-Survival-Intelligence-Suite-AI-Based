@@ -6,9 +6,10 @@ import urllib.request
 import matplotlib.pyplot as plt
 import seaborn as sns
 from sklearn.model_selection import train_test_split
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.ensemble import GradientBoostingClassifier
+from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
+from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, confusion_matrix, roc_curve, auc
+from sklearn.metrics import r2_score, mean_absolute_error, mean_squared_error
 import joblib
 
 # Set Page Config for premium layout
@@ -214,39 +215,51 @@ def preprocess_general(df, target_var, features_selected):
     X = df_clean[encoded_features]
     y = df_clean[target_var]
     
+    # Determine if task is classification or regression
+    # If the target is non-numeric or has <= 15 unique values, it is classification. Otherwise, regression.
+    unique_vals = np.unique(y)
+    unique_classes = len(unique_vals)
+    is_classification = not pd.api.types.is_numeric_dtype(y) or unique_classes <= 15
+    
     target_mapping = None
-    if y.dtype == object or y.dtype.name == "category":
+    if is_classification and not pd.api.types.is_numeric_dtype(y):
         y = y.astype(str)
         unique_targets = sorted(list(y.unique()))
         target_mapping = {val: idx for idx, val in enumerate(unique_targets)}
         y = y.map(target_mapping)
         
-    return X, y, imputers, label_encoders, target_mapping, encoded_features, df_clean
+    return X, y, imputers, label_encoders, target_mapping, encoded_features, df_clean, is_classification
 
 # --- AutoML TRAINING & CACHING ---
 @st.cache_resource
 def train_general_models(df, target_var, features_selected_tuple, rf_estimators, rf_depth, gb_estimators, gb_depth, gb_lr):
     features_selected = list(features_selected_tuple)
-    X, y, imputers, label_encoders, target_mapping, X_cols, df_clean = preprocess_general(df, target_var, features_selected)
+    X, y, imputers, label_encoders, target_mapping, X_cols, df_clean, is_classification = preprocess_general(df, target_var, features_selected)
     
-    # If target has too few classes (regression or single class)
-    unique_classes = len(np.unique(y))
-    if unique_classes < 2:
-        return None, None, None, None, None, None, imputers, label_encoders, target_mapping, X_cols, df_clean
+    # If target has too few classes for classification (e.g. 1 class)
+    if is_classification and len(np.unique(y)) < 2:
+        return None, None, None, None, None, None, imputers, label_encoders, target_mapping, X_cols, df_clean, is_classification
         
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
     
-    rf = RandomForestClassifier(n_estimators=rf_estimators, max_depth=rf_depth, random_state=42)
-    rf.fit(X_train, y_train)
-    
-    gb = GradientBoostingClassifier(n_estimators=gb_estimators, max_depth=gb_depth, learning_rate=gb_lr, random_state=42)
-    gb.fit(X_train, y_train)
-    
-    return rf, gb, X_train, X_test, y_train, y_test, imputers, label_encoders, target_mapping, X_cols, df_clean
+    if is_classification:
+        rf = RandomForestClassifier(n_estimators=rf_estimators, max_depth=rf_depth, random_state=42)
+        rf.fit(X_train, y_train)
+        
+        gb = GradientBoostingClassifier(n_estimators=gb_estimators, max_depth=gb_depth, learning_rate=gb_lr, random_state=42)
+        gb.fit(X_train, y_train)
+    else:
+        rf = RandomForestRegressor(n_estimators=rf_estimators, max_depth=rf_depth, random_state=42)
+        rf.fit(X_train, y_train)
+        
+        gb = GradientBoostingRegressor(n_estimators=gb_estimators, max_depth=gb_depth, learning_rate=gb_lr, random_state=42)
+        gb.fit(X_train, y_train)
+        
+    return rf, gb, X_train, X_test, y_train, y_test, imputers, label_encoders, target_mapping, X_cols, df_clean, is_classification
 
 # Load and train dynamically
 features_tuple = tuple(features_selected)
-rf, gb, X_train, X_test, y_train, y_test, imputers, label_encoders, target_mapping, X_cols, df_clean = train_general_models(
+rf, gb, X_train, X_test, y_train, y_test, imputers, label_encoders, target_mapping, X_cols, df_clean, is_classification = train_general_models(
     df_raw, target_var, features_tuple, rf_estimators, rf_depth, gb_estimators, gb_depth, gb_lr
 )
 
@@ -258,7 +271,7 @@ if rf is None:
 # --- SIDEBAR INTERFACE CONTROLS GENERATION ---
 st.sidebar.markdown("---")
 st.sidebar.subheader("🔧 Active AI Settings")
-selected_model_name = st.sidebar.selectbox("Active AI Model", ["Ensemble Model", "Gradient Boosting Classifier", "Random Forest Classifier"])
+selected_model_name = st.sidebar.selectbox("Active AI Model", ["Ensemble Model", "Gradient Boosting", "Random Forest"])
 
 # If Titanic, show custom presets
 if not is_custom_dataset:
@@ -332,7 +345,7 @@ tab_predict, tab_eda, tab_metrics = st.tabs(["🔮 Predictive AI Diagnostics", "
 
 # ================= TAB: PREDICTIVE AI =================
 with tab_predict:
-    st.header("🔮 AI Classification Diagnostic")
+    st.header("🔮 AI Prediction Diagnostic")
     
     col1, col2 = st.columns([1, 1.2])
     
@@ -353,55 +366,81 @@ with tab_predict:
                 
         input_vector = np.array([encoded_input_list])
         
-        # Models predict prob
-        prob_rf = rf.predict_proba(input_vector)[0][1]
-        prob_gb = gb.predict_proba(input_vector)[0][1]
-        
-        # Select active model probability
-        if selected_model_name == "Gradient Boosting Classifier":
-            survival_prob = prob_gb
-        elif selected_model_name == "Random Forest Classifier":
-            survival_prob = prob_rf
-        else: # Ensemble
-            survival_prob = (prob_rf + prob_gb) / 2.0
+        # Models predict
+        if is_classification:
+            prob_rf = rf.predict_proba(input_vector)[0][1]
+            prob_gb = gb.predict_proba(input_vector)[0][1]
             
-        st.markdown("---")
-        
-        # Display Result Gauge
-        st.subheader("Prediction Gauge")
-        
-        # Resolve target category labels
-        target_zero_label = "Class 0"
-        target_one_label = "Class 1"
-        if target_mapping is not None:
-            inverted_mapping = {v: k for k, v in target_mapping.items()}
-            target_zero_label = inverted_mapping.get(0, "Class 0")
-            target_one_label = inverted_mapping.get(1, "Class 1")
-        elif not is_custom_dataset:
-            target_zero_label = "DECEASED / LOST"
-            target_one_label = "RESCUED / SAFE"
+            # Select active model probability
+            if selected_model_name == "Gradient Boosting":
+                pred_prob = prob_gb
+            elif selected_model_name == "Random Forest":
+                pred_prob = prob_rf
+            else: # Ensemble
+                pred_prob = (prob_rf + prob_gb) / 2.0
+                
+            st.markdown("---")
             
-        label = target_one_label if survival_prob >= 0.50 else target_zero_label
-        
-        # Display large text metrics
-        st.metric(
-            label=f"Predicted Outcome ({label})", 
-            value=f"{survival_prob:.1%}", 
-            delta="High Probability" if survival_prob >= 0.50 else "Low Probability",
-            delta_color="normal" if survival_prob >= 0.50 else "inverse"
-        )
-        
-        # Visual indicator
-        st.progress(survival_prob)
-        if survival_prob >= 0.50:
-            st.success(f"✔️ The AI predicts a **{label}** classification outcome (Confidence: {survival_prob:.1%}).")
+            # Display Result Gauge
+            st.subheader("Prediction Gauge")
+            
+            # Resolve target category labels
+            target_zero_label = "Class 0"
+            target_one_label = "Class 1"
+            if target_mapping is not None:
+                inverted_mapping = {v: k for k, v in target_mapping.items()}
+                target_zero_label = inverted_mapping.get(0, "Class 0")
+                target_one_label = inverted_mapping.get(1, "Class 1")
+            elif not is_custom_dataset:
+                target_zero_label = "DECEASED / LOST"
+                target_one_label = "RESCUED / SAFE"
+                
+            label = target_one_label if pred_prob >= 0.50 else target_zero_label
+            
+            # Display large text metrics
+            st.metric(
+                label=f"Predicted Outcome ({label})", 
+                value=f"{pred_prob:.1%}", 
+                delta="High Probability" if pred_prob >= 0.50 else "Low Probability",
+                delta_color="normal" if pred_prob >= 0.50 else "inverse"
+            )
+            
+            # Visual indicator
+            st.progress(pred_prob)
+            if pred_prob >= 0.50:
+                st.success(f"✔️ The AI predicts a **{label}** classification outcome (Confidence: {pred_prob:.1%}).")
+            else:
+                st.error(f"❌ The AI predicts a **{label}** classification outcome (Confidence: {1.0 - pred_prob:.1%}).")
         else:
-            st.error(f"❌ The AI predicts a **{label}** classification outcome (Confidence: {1.0 - survival_prob:.1%}).")
+            # Regression outputs
+            pred_rf = rf.predict(input_vector)[0]
+            pred_gb = gb.predict(input_vector)[0]
+            
+            if selected_model_name == "Gradient Boosting":
+                predicted_val = pred_gb
+            elif selected_model_name == "Random Forest":
+                predicted_val = pred_rf
+            else: # Ensemble
+                predicted_val = (pred_rf + pred_gb) / 2.0
+                
+            st.markdown("---")
+            st.subheader("Predicted Numeric Value")
+            
+            target_mean = float(df_raw[target_var].mean())
+            delta_val = predicted_val - target_mean
+            
+            st.metric(
+                label=f"Predicted `{target_var}` value",
+                value=f"{predicted_val:.2f}",
+                delta=f"{delta_val:+.2f} from Dataset Average ({target_mean:.2f})"
+            )
+            
+            st.info(f"💡 The AI estimates that the value for `{target_var}` is **{predicted_val:.2f}**.")
 
         st.markdown("---")
         
         # What-If Counterfactual Simulator
-        st.subheader("💡 What-If Survival Path Simulator")
+        st.subheader("💡 What-If Survival Path Simulator" if is_classification else "💡 Feature Modifier Simulation")
         st.caption("Suggested feature adjustments to optimize the prediction outcome:")
         
         simulations = []
@@ -418,7 +457,7 @@ with tab_predict:
                     corr = 0
                     
                 if corr > 0.1 and val < mean_val:
-                    # Simulate setting it to 1.5 standard deviations above mean
+                    # Simulate setting it to 1.2 standard deviations above mean
                     std_val = df_raw[col].std() if df_raw[col].std() != 0 else 1
                     test_val = mean_val + 1.2 * std_val
                     
@@ -426,13 +465,20 @@ with tab_predict:
                     col_idx = X_cols.index(col)
                     test_vector[0][col_idx] = test_val
                     
-                    p_rf = rf.predict_proba(test_vector)[0][1]
-                    p_gb = gb.predict_proba(test_vector)[0][1]
-                    p_test = (p_rf + p_gb) / 2.0 if selected_model_name == "Ensemble Model" else p_gb if selected_model_name == "Gradient Boosting Classifier" else p_rf
-                    
-                    diff = p_test - survival_prob
-                    if diff > 0.03:
-                        st.markdown(f"- **Increase `{col}`**: Increasing this value to `{test_val:.2f}` improves output probability by **+{diff:.1%}** (New chance: **{p_test:.1%}**)")
+                    if is_classification:
+                        p_rf = rf.predict_proba(test_vector)[0][1]
+                        p_gb = gb.predict_proba(test_vector)[0][1]
+                        p_test = (p_rf + p_gb) / 2.0 if selected_model_name == "Ensemble Model" else p_gb if selected_model_name == "Gradient Boosting" else p_rf
+                        diff = p_test - pred_prob
+                        if diff > 0.03:
+                            st.markdown(f"- **Increase `{col}`**: Increasing this value to `{test_val:.2f}` improves output probability by **+{diff:.1%}** (New chance: **{p_test:.1%}**)")
+                    else:
+                        p_rf = rf.predict(test_vector)[0]
+                        p_gb = gb.predict(test_vector)[0]
+                        p_test = (p_rf + p_gb) / 2.0 if selected_model_name == "Ensemble Model" else p_gb if selected_model_name == "Gradient Boosting" else p_rf
+                        diff = p_test - predicted_val
+                        if abs(diff) > 0.05:
+                            st.markdown(f"- **Increase `{col}`**: Increasing this value to `{test_val:.2f}` changes predicted outcome value by **{diff:+.2f}** (New: **{p_test:.2f}**)")
                 elif corr < -0.1 and val > mean_val:
                     # Simulate setting it to standard deviation below mean
                     std_val = df_raw[col].std() if df_raw[col].std() != 0 else 1
@@ -442,13 +488,20 @@ with tab_predict:
                     col_idx = X_cols.index(col)
                     test_vector[0][col_idx] = test_val
                     
-                    p_rf = rf.predict_proba(test_vector)[0][1]
-                    p_gb = gb.predict_proba(test_vector)[0][1]
-                    p_test = (p_rf + p_gb) / 2.0 if selected_model_name == "Ensemble Model" else p_gb if selected_model_name == "Gradient Boosting Classifier" else p_rf
-                    
-                    diff = p_test - survival_prob
-                    if diff > 0.03:
-                        st.markdown(f"- **Decrease `{col}`**: Decreasing this value to `{test_val:.2f}` improves output probability by **+{diff:.1%}** (New chance: **{p_test:.1%}**)")
+                    if is_classification:
+                        p_rf = rf.predict_proba(test_vector)[0][1]
+                        p_gb = gb.predict_proba(test_vector)[0][1]
+                        p_test = (p_rf + p_gb) / 2.0 if selected_model_name == "Ensemble Model" else p_gb if selected_model_name == "Gradient Boosting" else p_rf
+                        diff = p_test - pred_prob
+                        if diff > 0.03:
+                            st.markdown(f"- **Decrease `{col}`**: Decreasing this value to `{test_val:.2f}` improves output probability by **+{diff:.1%}** (New chance: **{p_test:.1%}**)")
+                    else:
+                        p_rf = rf.predict(test_vector)[0]
+                        p_gb = gb.predict(test_vector)[0]
+                        p_test = (p_rf + p_gb) / 2.0 if selected_model_name == "Ensemble Model" else p_gb if selected_model_name == "Gradient Boosting" else p_rf
+                        diff = p_test - predicted_val
+                        if abs(diff) > 0.05:
+                            st.markdown(f"- **Decrease `{col}`**: Decreasing this value to `{test_val:.2f}` changes predicted outcome value by **{diff:+.2f}** (New: **{p_test:.2f}**)")
 
         # Custom localized gender baseline simulation for Titanic
         if not is_custom_dataset and "Sex" in features_selected and user_inputs.get("Sex") == "male":
@@ -457,8 +510,8 @@ with tab_predict:
             test_vector[0][col_idx] = 1 # female
             p_rf = rf.predict_proba(test_vector)[0][1]
             p_gb = gb.predict_proba(test_vector)[0][1]
-            p_test = (p_rf + p_gb) / 2.0 if selected_model_name == "Ensemble Model" else p_gb if selected_model_name == "Gradient Boosting Classifier" else p_rf
-            diff = p_test - survival_prob
+            p_test = (p_rf + p_gb) / 2.0 if selected_model_name == "Ensemble Model" else p_gb if selected_model_name == "Gradient Boosting" else p_rf
+            diff = p_test - pred_prob
             st.markdown(f"- **Demographics**: Under historical maritime guidelines, a female passenger with identical details had a **+{diff:.1%}** higher survival rate (**{p_test:.1%}** total chance).")
 
     with col2:
@@ -541,10 +594,17 @@ with tab_eda:
         elif not is_custom_dataset:
             y_val_plot = y_val_plot.map({0: "Deceased / Lost", 1: "Rescued / Safe"})
             
-        sns.countplot(x=y_val_plot, palette="crest", hue=y_val_plot, legend=False, ax=ax)
-        plt.title("Target Counts Distribution", fontsize=13, fontweight="bold", pad=15)
-        plt.ylabel("Number of Records")
-        plt.xlabel(f"{target_var} Classes")
+        if is_classification:
+            sns.countplot(x=y_val_plot, palette="crest", hue=y_val_plot, legend=False, ax=ax)
+            plt.title("Target Counts Distribution", fontsize=13, fontweight="bold", pad=15)
+            plt.ylabel("Number of Records")
+            plt.xlabel(f"{target_var} Classes")
+        else:
+            sns.histplot(x=df_clean[target_var], color="#06b6d4", kde=True, ax=ax)
+            plt.title("Target Numeric Distribution (KDE)", fontsize=13, fontweight="bold", pad=15)
+            plt.ylabel("Counts")
+            plt.xlabel(f"{target_var} Value")
+            
         plt.tight_layout()
         st.pyplot(fig)
         plt.close()
@@ -568,8 +628,8 @@ with tab_eda:
             data=scatter_df, 
             x=col_x, 
             y=col_y, 
-            hue="Survival Outcome", 
-            palette="viridis",
+            hue="Survival Outcome" if is_classification else None, 
+            palette="viridis" if is_classification else None,
             alpha=0.7, 
             s=85, 
             ax=ax
@@ -579,7 +639,7 @@ with tab_eda:
         plt.xlabel(col_x, fontsize=11)
         plt.ylabel(col_y, fontsize=11)
         plt.grid(True, linestyle=":", alpha=0.3)
-        plt.legend(frameon=True)
+        plt.legend(frameon=True) if is_classification else None
         plt.tight_layout()
         st.pyplot(fig)
         plt.close()
@@ -594,83 +654,139 @@ with tab_eda:
 with tab_metrics:
     st.header("📈 Model Evaluation & Diagnostics")
     
-    # Calculate Test Set predictions for evaluation
-    y_pred_rf = rf.predict(X_test)
-    rf_acc = accuracy_score(y_test, y_pred_rf)
-    rf_prec = precision_score(y_test, y_pred_rf, zero_division=0)
-    rf_rec = recall_score(y_test, y_pred_rf, zero_division=0)
-    rf_f1 = f1_score(y_test, y_pred_rf, zero_division=0)
-    rf_cm = confusion_matrix(y_test, y_pred_rf)
-    
-    y_pred_gb = gb.predict(X_test)
-    gb_acc = accuracy_score(y_test, y_pred_gb)
-    gb_prec = precision_score(y_test, y_pred_gb, zero_division=0)
-    gb_rec = recall_score(y_test, y_pred_gb, zero_division=0)
-    gb_f1 = f1_score(y_test, y_pred_gb, zero_division=0)
-    gb_cm = confusion_matrix(y_test, y_pred_gb)
-    
-    # Display comparison metrics in table
-    metrics_summary = pd.DataFrame({
-        "Performance Indicator": ["Accuracy Score", "Precision Score", "Recall Score", "F1 Score"],
-        "Random Forest Classifier": [f"{rf_acc:.2%}", f"{rf_prec:.2%}", f"{rf_rec:.2%}", f"{rf_f1:.2%}"],
-        "Gradient Boosting Classifier": [f"{gb_acc:.2%}", f"{gb_prec:.2%}", f"{gb_rec:.2%}", f"{gb_f1:.2%}"]
-    })
-    
-    st.subheader("Performance Indicators Comparison Table")
-    st.table(metrics_summary)
-    
-    col1, col2 = st.columns([1.2, 1])
-    
-    with col1:
-        st.subheader("Receiver Operating Characteristic (ROC) curves")
-        st.write("Charts model True Positive vs False Positive thresholds. High Area Under Curve (AUC) denotes superior models.")
+    if is_classification:
+        # Calculate Test Set predictions for evaluation
+        y_pred_rf = rf.predict(X_test)
+        rf_acc = accuracy_score(y_test, y_pred_rf)
+        rf_prec = precision_score(y_test, y_pred_rf, zero_division=0)
+        rf_rec = recall_score(y_test, y_pred_rf, zero_division=0)
+        rf_f1 = f1_score(y_test, y_pred_rf, zero_division=0)
+        rf_cm = confusion_matrix(y_test, y_pred_rf)
         
-        fig, ax = plt.subplots(figsize=(8, 6.5))
-        # RF ROC
-        rf_probs = rf.predict_proba(X_test)[:, 1]
-        fpr_rf, tpr_rf, _ = roc_curve(y_test, rf_probs)
-        roc_auc_rf = auc(fpr_rf, tpr_rf)
-        plt.plot(fpr_rf, tpr_rf, color="#6366f1", lw=2.5, label=f"Random Forest (AUC = {roc_auc_rf:.3f})")
+        y_pred_gb = gb.predict(X_test)
+        gb_acc = accuracy_score(y_test, y_pred_gb)
+        gb_prec = precision_score(y_test, y_pred_gb, zero_division=0)
+        gb_rec = recall_score(y_test, y_pred_gb, zero_division=0)
+        gb_f1 = f1_score(y_test, y_pred_gb, zero_division=0)
+        gb_cm = confusion_matrix(y_test, y_pred_gb)
         
-        # GB ROC
-        gb_probs = gb.predict_proba(X_test)[:, 1]
-        fpr_gb, tpr_gb, _ = roc_curve(y_test, gb_probs)
-        roc_auc_gb = auc(fpr_gb, tpr_gb)
-        plt.plot(fpr_gb, tpr_gb, color="#06b6d4", lw=2.5, label=f"Gradient Boosting (AUC = {roc_auc_gb:.3f})")
+        # Display comparison metrics in table
+        metrics_summary = pd.DataFrame({
+            "Performance Indicator": ["Accuracy Score", "Precision Score", "Recall Score", "F1 Score"],
+            "Random Forest Classifier": [f"{rf_acc:.2%}", f"{rf_prec:.2%}", f"{rf_rec:.2%}", f"{rf_f1:.2%}"],
+            "Gradient Boosting Classifier": [f"{gb_acc:.2%}", f"{gb_prec:.2%}", f"{gb_rec:.2%}", f"{gb_f1:.2%}"]
+        })
         
-        plt.plot([0, 1], [0, 1], color="grey", lw=1.5, linestyle="--")
-        plt.xlim([0.0, 1.0])
-        plt.ylim([0.0, 1.05])
-        plt.xlabel("False Positive Rate")
-        plt.ylabel("True Positive Rate")
-        plt.title("Model ROC Curve Comparison", fontsize=13, fontweight="bold", pad=15)
-        plt.legend(loc="lower right", frameon=True)
-        plt.tight_layout()
-        st.pyplot(fig)
-        plt.close()
+        st.subheader("Performance Indicators Comparison Table")
+        st.table(metrics_summary)
         
-    with col2:
-        st.subheader("Evaluation Confusion Matrix")
-        st.write(f"Distributes model classification errors across testing set partition ({len(y_test)} passenger records).")
+        col1, col2 = st.columns([1.2, 1])
         
-        # Select confusion matrix of the best performing model
-        best_cm = gb_cm if gb_acc > rf_acc else rf_cm
-        best_model = "Gradient Boosting" if gb_acc > rf_acc else "Random Forest"
+        with col1:
+            st.subheader("Receiver Operating Characteristic (ROC) curves")
+            st.write("Charts model True Positive vs False Positive thresholds. High Area Under Curve (AUC) denotes superior models.")
+            
+            fig, ax = plt.subplots(figsize=(8, 6.5))
+            # RF ROC
+            rf_probs = rf.predict_proba(X_test)[:, 1]
+            fpr_rf, tpr_rf, _ = roc_curve(y_test, rf_probs)
+            roc_auc_rf = auc(fpr_rf, tpr_rf)
+            plt.plot(fpr_rf, tpr_rf, color="#6366f1", lw=2.5, label=f"Random Forest (AUC = {roc_auc_rf:.3f})")
+            
+            # GB ROC
+            gb_probs = gb.predict_proba(X_test)[:, 1]
+            fpr_gb, tpr_gb, _ = roc_curve(y_test, gb_probs)
+            roc_auc_gb = auc(fpr_gb, tpr_gb)
+            plt.plot(fpr_gb, tpr_gb, color="#06b6d4", lw=2.5, label=f"Gradient Boosting (AUC = {roc_auc_gb:.3f})")
+            
+            plt.plot([0, 1], [0, 1], color="grey", lw=1.5, linestyle="--")
+            plt.xlim([0.0, 1.0])
+            plt.ylim([0.0, 1.05])
+            plt.xlabel("False Positive Rate")
+            plt.ylabel("True Positive Rate")
+            plt.title("Model ROC Curve Comparison", fontsize=13, fontweight="bold", pad=15)
+            plt.legend(loc="lower right", frameon=True)
+            plt.tight_layout()
+            st.pyplot(fig)
+            plt.close()
+            
+        with col2:
+            st.subheader("Evaluation Confusion Matrix")
+            st.write(f"Distributes model classification errors across testing set partition ({len(y_test)} passenger records).")
+            
+            # Select confusion matrix of the best performing model
+            best_cm = gb_cm if gb_acc > rf_acc else rf_cm
+            best_model = "Gradient Boosting" if gb_acc > rf_acc else "Random Forest"
+            
+            fig, ax = plt.subplots(figsize=(7, 6.5))
+            tn, fp, fn, tp = best_cm.ravel()
+            labels = np.array([
+                [f"True Negative (TN)\nDeceased Correctly\n\nCount: {tn}\nRatio: {tn/len(y_test):.1%}",
+                 f"False Positive (FP)\nType I Error\n\nCount: {fp}\nRatio: {fp/len(y_test):.1%}"],
+                [f"False Negative (FN)\nType II Error\n\nCount: {fn}\nRatio: {fn/len(y_test):.1%}",
+                 f"True Positive (TP)\nRescued / Safe\n\nCount: {tp}\nRatio: {tp/len(y_test):.1%}"]
+            ])
+            
+            sns.heatmap(best_cm, annot=labels, fmt="", cmap="Blues", cbar=False,
+                        xticklabels=["Predicted Perished", "Predicted Survived"],
+                        yticklabels=["Actual Perished", "Actual Survived"],
+                        annot_kws={"size": 10}, ax=ax)
+            plt.title(f"Confusion Matrix ({best_model})", fontsize=13, fontweight="bold", pad=15)
+            plt.tight_layout()
+            st.pyplot(fig)
+            plt.close()
+    else:
+        # Calculate Regression predictions
+        y_pred_rf = rf.predict(X_test)
+        rf_r2 = r2_score(y_test, y_pred_rf)
+        rf_mae = mean_absolute_error(y_test, y_pred_rf)
+        rf_rmse = np.sqrt(mean_squared_error(y_test, y_pred_rf))
         
-        fig, ax = plt.subplots(figsize=(7, 6.5))
-        tn, fp, fn, tp = best_cm.ravel()
-        labels = np.array([
-            [f"True Negative (TN)\nDeceased Correctly\n\nCount: {tn}\nRatio: {tn/len(y_test):.1%}",
-             f"False Positive (FP)\nType I Error\n\nCount: {fp}\nRatio: {fp/len(y_test):.1%}"],
-            [f"False Negative (FN)\nType II Error\n\nCount: {fn}\nRatio: {fn/len(y_test):.1%}",
-             f"True Positive (TP)\nRescued / Safe\n\nCount: {tp}\nRatio: {tp/len(y_test):.1%}"]
-        ])
+        y_pred_gb = gb.predict(X_test)
+        gb_r2 = r2_score(y_test, y_pred_gb)
+        gb_mae = mean_absolute_error(y_test, y_pred_gb)
+        gb_rmse = np.sqrt(mean_squared_error(y_test, y_pred_gb))
         
-        sns.heatmap(best_cm, annot=labels, fmt="", cmap="Blues", cbar=False,
-                    xticklabels=["Predicted Perished", "Predicted Survived"],
-                    yticklabels=["Actual Perished", "Actual Survived"],
-                    annot_kws={"size": 10}, ax=ax)
-        plt.title(f"Confusion Matrix ({best_model})", fontsize=13, fontweight="bold", pad=15)
-        plt.tight_layout()
-        st.pyplot(fig)
-        plt.close()
+        # Display comparison table
+        metrics_summary = pd.DataFrame({
+            "Performance Indicator": ["R² Score (R-Squared)", "Mean Absolute Error (MAE)", "Root Mean Squared Error (RMSE)"],
+            "Random Forest Regressor": [f"{rf_r2:.4f}", f"{rf_mae:.4f}", f"{rf_rmse:.4f}"],
+            "Gradient Boosting Regressor": [f"{gb_r2:.4f}", f"{gb_mae:.4f}", f"{gb_rmse:.4f}"]
+        })
+        
+        st.subheader("Performance Indicators Comparison Table (Regression)")
+        st.table(metrics_summary)
+        
+        col1, col2 = st.columns([1.2, 1])
+        
+        with col1:
+            st.subheader("Actual vs. Predicted Scatter Plot")
+            st.write("Plots predicted target values against actual validation values. Points close to the red diagonal reference line represent highly accurate estimations.")
+            
+            fig, ax = plt.subplots(figsize=(8, 6.5))
+            best_pred = y_pred_gb if gb_r2 > rf_r2 else y_pred_rf
+            best_model_name = "Gradient Boosting" if gb_r2 > rf_r2 else "Random Forest"
+            
+            plt.scatter(y_test, best_pred, color="#06b6d4", alpha=0.5, edgecolors="none", s=50)
+            
+            # Identity line
+            min_val = min(float(y_test.min()), float(best_pred.min()))
+            max_val = max(float(y_test.max()), float(best_pred.max()))
+            plt.plot([min_val, max_val], [min_val, max_val], color="#f43f5e", linestyle="--", lw=2, label="Perfect Fit (y=x)")
+            
+            plt.title(f"Actual vs. Predicted Values ({best_model_name})", fontsize=13, fontweight="bold", pad=15)
+            plt.xlabel(f"Actual {target_var}")
+            plt.ylabel(f"Predicted {target_var}")
+            plt.legend(frameon=True)
+            plt.grid(True, linestyle=":", alpha=0.3)
+            plt.tight_layout()
+            st.pyplot(fig)
+            plt.close()
+            
+        with col2:
+            st.subheader("Diagnostic Notes")
+            st.markdown(f"""
+            * **R² Score (R-Squared)**: Explains the percentage of variance in `{target_var}` captured by the features. An R² close to `1.0` is a perfect model.
+            * **Mean Absolute Error (MAE)**: Average absolute distance between actual and predicted values. On average, predictions deviate from target values by **{gb_mae if gb_r2 > rf_r2 else rf_mae:.2f}** units.
+            * **RMSE**: penalizes larger errors more heavily. Lower RMSE implies fewer severe prediction misses.
+            """)
