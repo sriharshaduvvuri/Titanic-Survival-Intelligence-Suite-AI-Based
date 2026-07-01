@@ -3,6 +3,7 @@ import time
 from fastapi import FastAPI, Request, Response
 from starlette.middleware.base import BaseHTTPMiddleware
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from database import engine, Base
 from routers import auth, predictions, analytics, reports, admin
 
@@ -88,6 +89,11 @@ app.include_router(predictions.router)
 app.include_router(analytics.router)
 app.include_router(reports.router)
 app.include_router(admin.router)
+
+# Mount static files directory for serving plots
+static_dir = os.path.join(os.path.dirname(__file__), "static")
+os.makedirs(os.path.join(static_dir, "plots"), exist_ok=True)
+app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
 @app.on_event("startup")
 def startup_event():

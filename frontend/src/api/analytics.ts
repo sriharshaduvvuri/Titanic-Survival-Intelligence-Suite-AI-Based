@@ -39,6 +39,24 @@ const mockAnalyticsReport = {
   ]
 };
 
+const mockModelMetrics = {
+  metrics: {
+    random_forest_accuracy: 0.812,
+    random_forest_precision: 0.795,
+    random_forest_recall: 0.761,
+    random_forest_f1: 0.778,
+    random_forest_cm: [480, 69, 45, 297],
+    
+    xgboost_accuracy: 0.832,
+    xgboost_precision: 0.815,
+    xgboost_recall: 0.784,
+    xgboost_f1: 0.799,
+    xgboost_cm: [490, 59, 41, 301],
+    
+    overall_accuracy: 0.832
+  }
+};
+
 export const analyticsApi = {
   getAnalytics: async () => {
     try {
@@ -50,5 +68,17 @@ export const analyticsApi = {
       }
       throw err;
     }
+  },
+  getModelMetrics: async () => {
+    try {
+      const res = await apiClient.get('/api/analytics/model-metrics');
+      return res.data;
+    } catch (err) {
+      if (axios.isAxiosError(err) && !err.response) {
+        return mockModelMetrics;
+      }
+      throw err;
+    }
   }
 };
+

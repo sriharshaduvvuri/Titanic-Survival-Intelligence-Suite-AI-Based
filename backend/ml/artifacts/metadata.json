@@ -17,7 +17,25 @@
     },
     "metrics": {
         "random_forest_accuracy": 0.8156424581005587,
+        "random_forest_precision": 0.8360655737704918,
+        "random_forest_recall": 0.6891891891891891,
+        "random_forest_f1": 0.7555555555555555,
+        "random_forest_cm": [
+            95,
+            10,
+            23,
+            51
+        ],
         "xgboost_accuracy": 0.8044692737430168,
+        "xgboost_precision": 0.7910447761194029,
+        "xgboost_recall": 0.7162162162162162,
+        "xgboost_f1": 0.75177304964539,
+        "xgboost_cm": [
+            91,
+            14,
+            21,
+            53
+        ],
         "overall_accuracy": 0.8156424581005587
     },
     "features": [

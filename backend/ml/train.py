@@ -7,6 +7,13 @@ from sklearn.model_selection import train_test_split
 from sklearn.ensemble import RandomForestClassifier
 import joblib
 
+# Plotting and metrics imports
+import matplotlib
+matplotlib.use('Agg') # Set non-interactive backend
+import matplotlib.pyplot as plt
+import seaborn as sns
+from sklearn.metrics import precision_score, recall_score, f1_score, confusion_matrix, roc_curve, auc
+
 # Attempt to import xgboost, fallback if not available
 try:
     from xgboost import XGBClassifier
@@ -135,6 +142,113 @@ def train_models():
         
     joblib.dump(rf, os.path.join(ARTIFACTS_DIR, "model_rf.joblib"))
     
+    # Calculate classification metrics
+    y_pred_rf = rf.predict(X_test)
+    rf_precision = float(precision_score(y_test, y_pred_rf))
+    rf_recall = float(recall_score(y_test, y_pred_rf))
+    rf_f1 = float(f1_score(y_test, y_pred_rf))
+    rf_cm = confusion_matrix(y_test, y_pred_rf)
+    
+    y_pred_xgb = xgb.predict(X_test)
+    xgb_precision = float(precision_score(y_test, y_pred_xgb))
+    xgb_recall = float(recall_score(y_test, y_pred_xgb))
+    xgb_f1 = float(f1_score(y_test, y_pred_xgb))
+    xgb_cm = confusion_matrix(y_test, y_pred_xgb)
+    
+    # Define plots directory
+    PLOTS_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "static", "plots"))
+    os.makedirs(PLOTS_DIR, exist_ok=True)
+    
+    # Use seaborn styling
+    sns.set_theme(style="whitegrid", palette="muted")
+    
+    # 1. Feature Correlation Heatmap
+    plt.figure(figsize=(9, 7))
+    correlation_df = df[["Survived", "Pclass", "Sex_encoded", "Age", "SibSp", "Parch", "Fare", "Embarked_encoded"]].copy()
+    correlation_df.columns = ["Survived", "Class", "Gender (F=1)", "Age", "Siblings/Spouses", "Parents/Children", "Fare", "Embarked Port"]
+    sns.heatmap(correlation_df.corr(), annot=True, cmap="coolwarm", fmt=".2f", linewidths=0.5, cbar_kws={'shrink': 0.8})
+    plt.title("Titanic Feature Correlation Heatmap", fontsize=14, fontweight="bold", pad=15)
+    plt.tight_layout()
+    plt.savefig(os.path.join(PLOTS_DIR, "correlation_matrix.png"), dpi=150)
+    plt.close()
+    
+    # 2. Feature Importances Barplot
+    plt.figure(figsize=(9, 5.5))
+    importances = rf.feature_importances_
+    indices = np.argsort(importances)[::-1]
+    feature_labels = {
+        "Pclass": "Passenger Class",
+        "Sex_encoded": "Gender (Female/Male)",
+        "Age": "Passenger Age",
+        "SibSp": "Siblings / Spouses",
+        "Parch": "Parents / Children",
+        "Fare": "Ticket Fare",
+        "Embarked_encoded": "Embarkation Port"
+    }
+    features_sorted = [feature_labels.get(features[i], features[i]) for i in indices]
+    importances_sorted = importances[indices]
+    sns.barplot(x=importances_sorted, y=features_sorted, palette="crest_r")
+    plt.title("Random Forest Classifier - Feature Importances", fontsize=14, fontweight="bold", pad=15)
+    plt.xlabel("Relative Importance Score", fontsize=11)
+    plt.tight_layout()
+    plt.savefig(os.path.join(PLOTS_DIR, "feature_importances.png"), dpi=150)
+    plt.close()
+    
+    # 3. Annotated Confusion Matrix Heatmap (for best model)
+    plt.figure(figsize=(7, 6))
+    best_model_name = "XGBoost/Gradient Boosting" if xgb_score > rf_score else "Random Forest"
+    best_cm = xgb_cm if xgb_score > rf_score else rf_cm
+    tn, fp, fn, tp = best_cm.ravel()
+    labels = np.array([
+        [f"True Negative (TN)\nDeceased correctly identified\n\nCount: {tn}\nPercentage: {tn/len(y_test):.1%}",
+         f"False Positive (FP)\nPredicted Survived, actually Perished\n\nCount: {fp}\nPercentage: {fp/len(y_test):.1%}"],
+        [f"False Negative (FN)\nPredicted Perished, actually Survived\n\nCount: {fn}\nPercentage: {fn/len(y_test):.1%}",
+         f"True Positive (TP)\nSurvivors correctly flagged\n\nCount: {tp}\nPercentage: {tp/len(y_test):.1%}"]
+    ])
+    sns.heatmap(best_cm, annot=labels, fmt="", cmap="Blues", cbar=False,
+                xticklabels=["Predicted Perished", "Predicted Survived"],
+                yticklabels=["Actual Perished", "Actual Survived"],
+                annot_kws={"size": 10})
+    plt.title(f"Evaluation Confusion Matrix ({best_model_name})", fontsize=13, fontweight="bold", pad=15)
+    plt.tight_layout()
+    plt.savefig(os.path.join(PLOTS_DIR, "confusion_matrix.png"), dpi=150)
+    plt.close()
+    
+    # 4. ROC Curve Comparison
+    plt.figure(figsize=(8, 7))
+    rf_probs = rf.predict_proba(X_test)[:, 1]
+    fpr_rf, tpr_rf, _ = roc_curve(y_test, rf_probs)
+    roc_auc_rf = auc(fpr_rf, tpr_rf)
+    plt.plot(fpr_rf, tpr_rf, color="#6366f1", lw=2.5, label=f"Random Forest (AUC = {roc_auc_rf:.3f})")
+    
+    xgb_probs = xgb.predict_proba(X_test)[:, 1]
+    fpr_xgb, tpr_xgb, _ = roc_curve(y_test, xgb_probs)
+    roc_auc_xgb = auc(fpr_xgb, tpr_xgb)
+    plt.plot(fpr_xgb, tpr_xgb, color="#06b6d4", lw=2.5, label=f"Gradient Boosting/XGB (AUC = {roc_auc_xgb:.3f})")
+    
+    plt.plot([0, 1], [0, 1], color="grey", lw=1.5, linestyle="--")
+    plt.xlim([0.0, 1.0])
+    plt.ylim([0.0, 1.05])
+    plt.xlabel("False Positive Rate", fontsize=11)
+    plt.ylabel("True Positive Rate", fontsize=11)
+    plt.title("Model ROC Curve Comparison", fontsize=14, fontweight="bold", pad=15)
+    plt.legend(loc="lower right", frameon=True, facecolor="white", edgecolor="none")
+    plt.tight_layout()
+    plt.savefig(os.path.join(PLOTS_DIR, "roc_curve.png"), dpi=150)
+    plt.close()
+    
+    # 5. Age Distribution KDE plot
+    plt.figure(figsize=(8.5, 5.5))
+    sns.kdeplot(data=df[df["Survived"] == 1], x="Age", fill=True, color="#10b981", label="Survived", alpha=0.4, linewidth=2)
+    sns.kdeplot(data=df[df["Survived"] == 0], x="Age", fill=True, color="#f43f5e", label="Perished", alpha=0.4, linewidth=2)
+    plt.title("Age Density Distribution by Survival Outcome", fontsize=14, fontweight="bold", pad=15)
+    plt.xlabel("Age (Years)", fontsize=11)
+    plt.ylabel("Density", fontsize=11)
+    plt.legend(frameon=True, facecolor="white")
+    plt.tight_layout()
+    plt.savefig(os.path.join(PLOTS_DIR, "age_survival_density.png"), dpi=150)
+    plt.close()
+    
     # Save training metadata
     meta = {
         "imputation": {
@@ -148,7 +262,17 @@ def train_models():
         },
         "metrics": {
             "random_forest_accuracy": float(rf_score),
+            "random_forest_precision": float(rf_precision),
+            "random_forest_recall": float(rf_recall),
+            "random_forest_f1": float(rf_f1),
+            "random_forest_cm": [int(x) for x in rf_cm.ravel()], # [tn, fp, fn, tp]
+            
             "xgboost_accuracy": float(xgb_score),
+            "xgboost_precision": float(xgb_precision),
+            "xgboost_recall": float(xgb_recall),
+            "xgboost_f1": float(xgb_f1),
+            "xgboost_cm": [int(x) for x in xgb_cm.ravel()], # [tn, fp, fn, tp]
+            
             "overall_accuracy": float(max(rf_score, xgb_score))
         },
         "features": features,
@@ -161,7 +285,7 @@ def train_models():
     with open(os.path.join(ARTIFACTS_DIR, "metadata.json"), "w") as f:
         json.dump(meta, f, indent=4)
         
-    print("Models trained and metadata saved successfully!")
+    print("Models trained, visual plots generated, and metadata saved successfully!")
     print(f"RF Accuracy: {rf_score:.4f} | XGB/GB Accuracy: {xgb_score:.4f}")
 
 if __name__ == "__main__":

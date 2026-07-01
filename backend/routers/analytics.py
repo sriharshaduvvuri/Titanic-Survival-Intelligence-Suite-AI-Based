@@ -192,3 +192,21 @@ def get_analytics_report(db: Session = Depends(get_db)):
         age_groups=age_analysis,
         correlation=correlation
     )
+
+@router.get("/model-metrics")
+def get_model_metrics():
+    meta_path = os.path.join(ARTIFACTS_DIR, "metadata.json")
+    if not os.path.exists(meta_path):
+        # Trigger training to generate metadata and plots if missing
+        from ml.train import train_models
+        try:
+            train_models()
+        except Exception as e:
+            return {"error": f"Failed to train models: {str(e)}"}
+            
+    try:
+        with open(meta_path, "r") as f:
+            return json.load(f)
+    except Exception as e:
+        return {"error": f"Failed to read metadata: {str(e)}"}
+
